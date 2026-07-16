@@ -13,7 +13,7 @@ export default async function LoginPage() {
     <main className="gate">
       <div className="gate-card">
         <h1 className="wordmark" style={{ marginBottom: 4 }}>
-          Snap<span>AI</span> web
+          Icon<span>Pack</span> Generator
         </h1>
         <p className="gate-lede">
           Alat ini masih tertutup. Masukkan kode undangan untuk melanjutkan.

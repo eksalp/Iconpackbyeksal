@@ -47,9 +47,7 @@ export default async function Page() {
           >
             SnapAI
           </a>{" "}
-          karya Beto Moedano, lisensi MIT. Logika prompt di{" "}
-          <code>lib/icon-prompt.ts</code> dan <code>lib/styleTemplates.ts</code>{" "}
-          disalin dari proyek itu tanpa perubahan.
+          karya Beto Moedano, lisensi MIT.
         </p>
         <p>
           Situs ini tidak menyimpan key, prompt, maupun gambar. Biaya generate

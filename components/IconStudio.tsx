@@ -5,6 +5,16 @@ import { useRouter } from "next/navigation";
 import { buildFinalIconPrompt } from "@/lib/icon-prompt";
 import { StyleTemplates } from "@/lib/styleTemplates";
 import {
+  loadHistory,
+  addToHistory,
+  markDownloaded,
+  removeEntry,
+  clearHistory,
+  formatWhen,
+  type HistoryEntry,
+} from "@/lib/history";
+
+import {
   MODELS,
   PROVIDERS,
   DEFAULT_MODEL,
@@ -13,7 +23,15 @@ import {
 } from "@/lib/models";
 
 const KEY_STORAGE = "snapai:key";
-const FILLERS = ["Notes", "Clock", "Maps", "Music", "Files", "Weather", "Camera"];
+const FILLERS = [
+  "Notes",
+  "Clock",
+  "Maps",
+  "Music",
+  "Files",
+  "Weather",
+  "Camera",
+];
 const RULER = [180, 120, 60, 40, 29];
 
 export default function IconStudio() {
@@ -29,7 +47,9 @@ export default function IconStudio() {
   const [quality, setQuality] = useState("1k");
   const [thinking, setThinking] = useState<"minimal" | "max">("minimal");
   const [background, setBackground] = useState("auto");
-  const [outputFormat, setOutputFormat] = useState<"png" | "jpeg" | "webp">("png");
+  const [outputFormat, setOutputFormat] = useState<"png" | "jpeg" | "webp">(
+    "png",
+  );
   const [count, setCount] = useState(1);
   const [showPrompt, setShowPrompt] = useState(false);
 
@@ -38,6 +58,8 @@ export default function IconStudio() {
   const [images, setImages] = useState<string[]>([]);
   const [active, setActive] = useState(0);
 
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [activeEntryIds, setActiveEntryIds] = useState<string[]>([]);
   const [wall, setWall] = useState<"light" | "dark">("light");
   const [blur, setBlur] = useState(0);
 
@@ -61,6 +83,7 @@ export default function IconStudio() {
       /* storage blocked — the field just starts empty */
     }
     setKeyLoaded(true);
+    setHistory(loadHistory());
   }, []);
 
   useEffect(() => {
@@ -77,7 +100,8 @@ export default function IconStudio() {
   useEffect(() => {
     const next = MODELS[model];
     if (!next.qualities.includes(quality)) setQuality(next.qualities[0]);
-    if (!next.supportsTransparent && background === "transparent") setBackground("auto");
+    if (!next.supportsTransparent && background === "transparent")
+      setBackground("auto");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model]);
 
@@ -99,10 +123,11 @@ export default function IconStudio() {
 
   async function generate() {
     setError(null);
-    if (!apiKey.trim()) return setError("Tempel API key kamu dulu di panel atas.");
+    if (!apiKey.trim())
+      return setError("Tempel API key kamu dulu di panel atas.");
     if (mismatch) {
       return setError(
-        `Key ${PROVIDERS[detected!].label} tidak bisa dipakai untuk model yang berjalan di ${provider.label}.`
+        `Key ${PROVIDERS[detected!].label} tidak bisa dipakai untuk model yang berjalan di ${provider.label}.`,
       );
     }
     if (!prompt.trim()) return setError("Prompt masih kosong.");
@@ -137,20 +162,24 @@ export default function IconStudio() {
           }).then(async (res) => {
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-              const err: any = new Error(data.error || `Request gagal (${res.status})`);
+              const err: any = new Error(
+                data.error || `Request gagal (${res.status})`,
+              );
               err.status = res.status;
               throw err;
             }
             return data.dataUrl as string;
-          })
-        )
+          }),
+        ),
       );
 
       const ok = results
-        .filter((r): r is PromiseFulfilledResult<string> => r.status === "fulfilled")
+        .filter(
+          (r): r is PromiseFulfilledResult<string> => r.status === "fulfilled",
+        )
         .map((r) => r.value);
       const failed = results.filter(
-        (r): r is PromiseRejectedResult => r.status === "rejected"
+        (r): r is PromiseRejectedResult => r.status === "rejected",
       );
 
       // Sesi habis di tengah jalan — kembalikan ke gerbang, jangan tampilkan
@@ -165,9 +194,25 @@ export default function IconStudio() {
       }
 
       setImages(ok);
+
+      const ids: string[] = [];
+      for (const dataUrl of ok) {
+        const next = await addToHistory(dataUrl, {
+          prompt,
+          model,
+          style,
+          quality,
+          rawPrompt,
+          useIconWords,
+        });
+        setHistory(next);
+        if (next[0]) ids.push(next[0].id);
+      }
+      setActiveEntryIds(ids);
+
       if (failed.length > 0) {
         setError(
-          `${failed.length} dari ${count} gambar gagal. ${failed[0].reason?.message ?? ""}`
+          `${failed.length} dari ${count} gambar gagal. ${failed[0].reason?.message ?? ""}`,
         );
       }
     } catch (err: any) {
@@ -181,14 +226,30 @@ export default function IconStudio() {
     const url = images[active];
     if (!url) return;
     const mime = url.slice(5, url.indexOf(";"));
-    const ext = mime === "image/jpeg" ? "jpg" : mime === "image/webp" ? "webp" : "png";
+    const ext =
+      mime === "image/jpeg" ? "jpg" : mime === "image/webp" ? "webp" : "png";
     const a = document.createElement("a");
     a.href = url;
     a.download = `icon-${Date.now()}.${ext}`;
     document.body.appendChild(a);
     a.click();
     a.remove();
+
+    const entryId = activeEntryIds[active];
+    if (entryId) setHistory(markDownloaded(entryId));
   }
+
+  /** Riwayat hanya menyimpan thumbnail, jadi yang dipulihkan pengaturannya. */
+  function recall(entry: HistoryEntry) {
+    setPrompt(entry.prompt);
+    setStyle(entry.style);
+    setRawPrompt(entry.rawPrompt);
+    setUseIconWords(entry.useIconWords);
+    if (MODELS[entry.model as ModelId]) setModel(entry.model as ModelId);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  const pendingDownload = history.filter((e) => !e.downloaded).length;
 
   const current = images[active];
 
@@ -227,11 +288,15 @@ export default function IconStudio() {
 
           {mismatch && (
             <div className="notice notice-error" role="alert">
-              <strong>Key tidak cocok dengan model.</strong> Key ini bentuknya key{" "}
-              {PROVIDERS[detected!].label}, tapi model yang dipilih berjalan di{" "}
-              {provider.label}. Ganti model, atau tempel key {provider.label} —
-              ambil di{" "}
-              <a href={provider.keyUrl} target="_blank" rel="noopener noreferrer">
+              <strong>Key tidak cocok dengan model.</strong> Key ini bentuknya
+              key {PROVIDERS[detected!].label}, tapi model yang dipilih berjalan
+              di {provider.label}. Ganti model, atau tempel key {provider.label}{" "}
+              — ambil di{" "}
+              <a
+                href={provider.keyUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
                 akses api
               </a>
               .
@@ -239,8 +304,8 @@ export default function IconStudio() {
           )}
 
           <div className="notice notice-warn">
-            <strong>Key harus dari provider yang sama dengan model.</strong> Model
-            sekarang berjalan di {provider.label}, jadi yang dibutuhkan{" "}
+            <strong>Key harus dari provider yang sama dengan model.</strong>{" "}
+            Model sekarang berjalan di {provider.label}, jadi yang dibutuhkan{" "}
             {provider.keyLabel}. Key provider lain akan ditolak.
           </div>
 
@@ -253,16 +318,17 @@ export default function IconStudio() {
             <span className="toggle-copy">
               <strong>Simpan key di browser ini</strong>
               <span>
-                Disimpan di localStorage perangkat kamu. Jangan centang di komputer bersama.
+                Disimpan di localStorage perangkat kamu. Jangan centang di
+                komputer bersama.
               </span>
             </span>
           </label>
 
           <div className="notice notice-warn">
-            <strong>Key kamu melewati server situs ini.</strong> Key dipakai untuk satu
-            permintaan lalu dibuang — tidak disimpan, tidak dicatat di log. Tapi kamu tetap
-            harus mempercayai itu. Kalau ragu, jalankan sendiri dari source, dan pakai key
-            yang punya batas belanja.
+            <strong>Key kamu melewati server situs ini.</strong> Key dipakai
+            untuk satu permintaan lalu dibuang — tidak disimpan, tidak dicatat
+            di log. Tapi kamu tetap harus mempercayai itu. Kalau ragu, jalankan
+            sendiri dari source, dan pakai key yang punya batas belanja.
           </div>
         </section>
 
@@ -282,8 +348,9 @@ export default function IconStudio() {
               onChange={(e) => setPrompt(e.target.value)}
             />
             <p className="field-hint">
-              Tulis subjeknya saja. Sisanya — rasio, komposisi, larangan teks — ditambahkan
-              otomatis. <span className="counter">{prompt.length}/1000</span>
+              Tulis subjeknya saja. Sisanya — rasio, komposisi, larangan teks —
+              ditambahkan otomatis.{" "}
+              <span className="counter">{prompt.length}/1000</span>
             </p>
           </div>
 
@@ -302,7 +369,8 @@ export default function IconStudio() {
                   .filter((m) => m.provider === "fal")
                   .map((m) => (
                     <option key={m.id} value={m.id}>
-                      {m.label} — {m.price}
+                      {m.label}
+                      {m.price ? ` — ${m.price}` : ""}
                     </option>
                   ))}
               </optgroup>
@@ -311,7 +379,8 @@ export default function IconStudio() {
                   .filter((m) => m.provider === "gemini")
                   .map((m) => (
                     <option key={m.id} value={m.id}>
-                      {m.label} — {m.price}
+                      {m.label}
+                      {m.price ? ` — ${m.price}` : ""}
                     </option>
                   ))}
               </optgroup>
@@ -320,7 +389,8 @@ export default function IconStudio() {
                   .filter((m) => m.provider === "openai")
                   .map((m) => (
                     <option key={m.id} value={m.id}>
-                      {m.label} — {m.price}
+                      {m.label}
+                      {m.price ? ` — ${m.price}` : ""}
                     </option>
                   ))}
               </optgroup>
@@ -328,8 +398,8 @@ export default function IconStudio() {
             {info.note && <p className="field-hint">{info.note}</p>}
             {info.deprecated && (
               <div className="notice notice-warn">
-                <strong>Model ini akan dihentikan.</strong> {info.deprecated} Pindah ke Nano
-                Banana 2 sebelum tanggal itu.
+                <strong>Model ini akan dihentikan.</strong> {info.deprecated}{" "}
+                Pindah ke Nano Banana 2 sebelum tanggal itu.
               </div>
             )}
           </div>
@@ -408,8 +478,8 @@ export default function IconStudio() {
 
           {count > 1 && (
             <p className="field-hint">
-              Tiap variasi = satu panggilan API terpisah, jadi {count} gambar berarti{" "}
-              {count}× biaya.
+              Tiap variasi = satu panggilan API terpisah, jadi {count} gambar
+              berarti {count}× biaya.
             </p>
           )}
 
@@ -422,7 +492,9 @@ export default function IconStudio() {
                 id="thinking"
                 className="select"
                 value={thinking}
-                onChange={(e) => setThinking(e.target.value as "minimal" | "max")}
+                onChange={(e) =>
+                  setThinking(e.target.value as "minimal" | "max")
+                }
               >
                 <option value="minimal">minimal — lebih cepat</option>
                 <option value="max">max — penalaran lebih dalam</option>
@@ -444,7 +516,9 @@ export default function IconStudio() {
                 >
                   <option value="auto">auto</option>
                   <option value="opaque">opaque</option>
-                  {info.supportsTransparent && <option value="transparent">transparent</option>}
+                  {info.supportsTransparent && (
+                    <option value="transparent">transparent</option>
+                  )}
                 </select>
               </div>
 
@@ -475,7 +549,9 @@ export default function IconStudio() {
               />
               <span className="toggle-copy">
                 <strong>Prompt mentah</strong>
-                <span>Kirim teksmu apa adanya. Semua aturan bawaan dilewati.</span>
+                <span>
+                  Kirim teksmu apa adanya. Semua aturan bawaan dilewati.
+                </span>
               </span>
             </label>
 
@@ -487,7 +563,9 @@ export default function IconStudio() {
               />
               <span className="toggle-copy">
                 <strong>Boleh pakai kata &ldquo;icon&rdquo;</strong>
-                <span>Framing lebih ikonik, tapi sering menambah padding kosong.</span>
+                <span>
+                  Framing lebih ikonik, tapi sering menambah padding kosong.
+                </span>
               </span>
             </label>
           </div>
@@ -511,7 +589,10 @@ export default function IconStudio() {
             </div>
           )}
 
-          <div className="preview-head" style={{ marginTop: 16, marginBottom: 0 }}>
+          <div
+            className="preview-head"
+            style={{ marginTop: 16, marginBottom: 0 }}
+          >
             <button
               type="button"
               className="btn-ghost"
@@ -527,7 +608,8 @@ export default function IconStudio() {
 
           {showPrompt && (
             <pre className="preview-pre" style={{ marginTop: 10 }}>
-              {finalPrompt || "Tulis deskripsi dulu untuk melihat prompt akhirnya."}
+              {finalPrompt ||
+                "Tulis deskripsi dulu untuk melihat prompt akhirnya."}
             </pre>
           )}
         </section>
@@ -567,6 +649,14 @@ export default function IconStudio() {
 
           {current && (
             <div style={{ marginTop: 12 }}>
+              <div
+                className="notice notice-warn"
+                style={{ marginTop: 0, marginBottom: 10 }}
+              >
+                <strong>Unduh sekarang.</strong> Gambar ini tidak disimpan di
+                mana pun. Muat ulang halaman dan ia hilang — riwayat di bawah
+                cuma menyimpan thumbnail kecil, bukan file aslinya.
+              </div>
               <button className="btn-primary" onClick={download}>
                 Unduh PNG
               </button>
@@ -587,8 +677,14 @@ export default function IconStudio() {
                 if (isSubject) {
                   return (
                     <div className="slot" key={i}>
-                      <div className={current ? "slot-tile" : "slot-tile slot-filler"}>
-                        {current && <img src={current} alt="Ikon kamu di home screen" />}
+                      <div
+                        className={
+                          current ? "slot-tile" : "slot-tile slot-filler"
+                        }
+                      >
+                        {current && (
+                          <img src={current} alt="Ikon kamu di home screen" />
+                        )}
                       </div>
                       <span className="slot-caption">Punyamu</span>
                     </div>
@@ -642,22 +738,106 @@ export default function IconStudio() {
           </div>
 
           <p className="field-hint" style={{ marginTop: 10 }}>
-            Prompt bawaan SnapAI menyuruh model lolos tiga tes: terbaca saat diperkecil,
-            siluetnya masih kebaca saat diburamkan, dan kontras di wallpaper terang maupun
-            gelap. Panel ini alat untuk menilai ketiganya.
+            Prompt bawaan SnapAI menyuruh model lolos tiga tes: terbaca saat
+            diperkecil, siluetnya masih kebaca saat diburamkan, dan kontras di
+            wallpaper terang maupun gelap. Panel ini alat untuk menilai
+            ketiganya.
           </p>
 
           {current && (
             <div className="ruler">
               {RULER.map((size) => (
                 <div className="ruler-item" key={size}>
-                  <div className="ruler-tile" style={{ width: size, height: size }}>
+                  <div
+                    className="ruler-tile"
+                    style={{ width: size, height: size }}
+                  >
                     <img src={current} alt="" />
                   </div>
                   <span className="ruler-label">{size}px</span>
                 </div>
               ))}
             </div>
+          )}
+        </section>
+
+        <section className="panel">
+          <div className="preview-head">
+            <h3 className="panel-title" style={{ marginBottom: 0 }}>
+              Riwayat di perangkat ini
+            </h3>
+            {history.length > 0 && (
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => {
+                  setHistory(clearHistory());
+                  setActiveEntryIds([]);
+                }}
+              >
+                Hapus semua
+              </button>
+            )}
+          </div>
+
+          {history.length === 0 ? (
+            <p className="field-hint" style={{ marginTop: 0 }}>
+              Belum ada. Ikon yang kamu buat akan muncul di sini sebagai
+              thumbnail, tersimpan di browser ini saja.
+            </p>
+          ) : (
+            <>
+              {pendingDownload > 0 && (
+                <div className="notice notice-warn" style={{ marginTop: 0 }}>
+                  <strong>{pendingDownload} ikon belum diunduh.</strong> Yang
+                  tersimpan di sini hanya thumbnail — file aslinya sudah hilang
+                  dan tidak bisa dikembalikan. Klik entrinya untuk memuat ulang
+                  pengaturannya, lalu buat lagi.
+                </div>
+              )}
+
+              <ul className="history-list">
+                {history.map((entry) => (
+                  <li key={entry.id} className="history-item">
+                    <button
+                      type="button"
+                      className="history-main"
+                      onClick={() => recall(entry)}
+                      title="Muat pengaturan ini ke form"
+                    >
+                      <span className="history-thumb">
+                        <img src={entry.thumb} alt="" />
+                        {!entry.downloaded && (
+                          <span className="history-dot" title="Belum diunduh" />
+                        )}
+                      </span>
+                      <span className="history-body">
+                        <span className="history-prompt">{entry.prompt}</span>
+                        <span className="history-meta">
+                          {formatWhen(entry.createdAt)}
+                          {entry.style ? ` · ${entry.style}` : ""}
+                          {entry.downloaded ? " · sudah diunduh" : ""}
+                        </span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="history-remove"
+                      aria-label="Hapus dari riwayat"
+                      onClick={() => setHistory(removeEntry(entry.id))}
+                    >
+                      ×
+                    </button>
+                  </li>
+                ))}
+              </ul>
+
+              <p className="field-hint">
+                Riwayat tersimpan di browser ini saja — tidak terkirim ke
+                server, dan tidak muncul di perangkat lain. Membersihkan data
+                browser akan menghapusnya.
+              </p>
+            </>
           )}
         </section>
       </div>
